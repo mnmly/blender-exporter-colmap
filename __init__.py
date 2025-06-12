@@ -2,9 +2,12 @@ import numpy as np
 from pathlib import Path
 import mathutils
 from . ext.read_write_model import write_model, Camera, Image
+from . ext.create_point3d import create_point3d_from_mesh
 from bpy_extras.io_utils import ExportHelper
 from bpy.props import StringProperty
 import bpy
+
+
 bl_info = {
     "name": "Scene exporter for colmap",
     "description": "Generates a dataset for colmap by exporting blender camera poses and rendering scene.",
@@ -17,7 +20,6 @@ bl_info = {
     "tracker_url": "https://github.com/ohayoyogi/blender-exporter-colmap/issues",
     "category": "Import-Export"
 }
-
 
 class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
 
@@ -42,6 +44,24 @@ class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
 
         cameras = {}
         images = {}
+
+        point3ds = []
+        for obj in bpy.data.objects:
+            if obj.type == 'MESH':
+                pointCloudGeomteryNode = None
+                for mod in obj.modifiers:
+                    if mod.node_group.name == "PointCloudGeneration":
+                        pointCloudGeomteryNode = mod
+                
+                if pointCloudGeomteryNode != None:
+                    p_show_viewport = pointCloudGeomteryNode.show_viewport
+                    p_show_render = pointCloudGeomteryNode.show_render
+                    pointCloudGeomteryNode.show_viewport = True
+                    pointCloudGeomteryNode.show_render = True
+                    point3ds += create_point3d_from_mesh(obj)
+                    pointCloudGeomteryNode.show_viewport = p_show_viewport
+                    pointCloudGeomteryNode.show_render = p_show_render
+
         for idx, cam in enumerate(sorted(scene_cameras, key=lambda x: x.name_full + ".jpg")):
             camera_id = idx+1
             filename = f'{cam.name_full}.jpg'
@@ -100,8 +120,8 @@ class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
             bpy.data.images['Render Result'].save_render(
                 str(images_dir / filename))
             yield 100.0 * idx / (len(scene_cameras) + 1)
-
-        write_model(cameras, images, {}, str(output_dir), output_format)
+                
+        write_model(cameras, images, {item.id: item for item in point3ds}, str(output_dir), output_format)
         yield 100.0
 
     def execute_(self, context, format):
