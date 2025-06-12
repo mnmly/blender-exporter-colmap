@@ -198,6 +198,7 @@ def write_cameras_binary(cameras, path_to_model_file):
         for _, cam in cameras.items():
             model_id = CAMERA_MODEL_NAMES[cam.model].model_id
             camera_properties = [cam.id, model_id, cam.width, cam.height]
+            print(camera_properties)
             write_next_bytes(fid, camera_properties, "iiQQ")
             for p in cam.params:
                 write_next_bytes(fid, float(p), "d")
@@ -509,15 +510,15 @@ def read_model(path, ext=""):
     return cameras, images, points3D
 
 
-def write_model(cameras, images, points3D, path, ext=".bin"):
-    if ext == ".txt":
-        write_cameras_text(cameras, os.path.join(path, "cameras" + ext))
-        write_images_text(images, os.path.join(path, "images" + ext))
-        write_points3D_text(points3D, os.path.join(path, "points3D") + ext)
+def write_model(cameras, images, points3D, output_dir, ext=".bin"):
+    if ext == "txt":
+        write_cameras_text(cameras, output_dir / f"cameras.{ext}")
+        write_images_text(images, output_dir / f"images.{ext}")
+        write_points3D_text(points3D, output_dir / f"points3D.{ext}")
     else:
-        write_cameras_binary(cameras, os.path.join(path, "cameras" + ext))
-        write_images_binary(images, os.path.join(path, "images" + ext))
-        write_points3D_binary(points3D, os.path.join(path, "points3D") + ext)
+        write_cameras_binary(cameras, output_dir / f"cameras.{ext}")
+        write_images_binary(images, output_dir / f"images.{ext}")
+        write_points3D_binary(points3D, output_dir / f"points3D.{ext}")
     return cameras, images, points3D
 
 
