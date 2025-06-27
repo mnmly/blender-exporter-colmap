@@ -7,7 +7,7 @@ bl_info = {
     "name": "Scene exporter for colmap",
     "description": "Generates a dataset for colmap by exporting blender camera poses and rendering scene.",
     "author": "Ohayoyogi",
-    "version": (0, 2, 0),
+    "version": (0, 3, 0),
     "blender": (3, 6, 0),
     "location": "View3D > N-Panel > COLMAP PREP",
     "warning": "",

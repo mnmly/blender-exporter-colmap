@@ -6,6 +6,7 @@ from bpy.props import StringProperty, BoolProperty, EnumProperty
 from .. utils.create_point3d import create_point3d_from_mesh
 from .. utils.read_write_model import write_model, Camera, Image
 import numpy as np
+import glob
 
 class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
 
@@ -31,6 +32,28 @@ class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
             ('bin', 'Binary (.bin)', 'Binary format')
         ],
         default='bin'
+    )
+
+    camera_model: EnumProperty(
+        name="Camera Model",
+        description="Choose camera model for COLMAP",
+        items=[
+            ('PINHOLE', 'Pinhole', 'Pinhole camera model'),
+            ('OPENCV', 'OpenCV', 'OpenCV camera model')
+        ],
+        default='OPENCV'
+    )
+
+    downsample_images: BoolProperty(
+        name="Downsample Images",
+        description="Create downsampled versions of the rendered images",
+        default=True
+    )
+
+    downsample_factors: StringProperty(
+        name="Downsample Factors",
+        description="Space-separated list of factors to downsample images by",
+        default="2 4 8"
     )
 
     def get_pc_gen_modifier(self, obj):
@@ -135,11 +158,13 @@ class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
         # Principal point (assuming centered)
         cx = width / 2
         cy = height / 2
-        
-        # Distortion parameters (set to 0 for now)
-        k1 = k2 = p1 = p2 = 0
-        
-        return [fx, fy, cx, cy, k1, k2, p1, p2]
+
+        if self.camera_model == 'PINHOLE':
+            return [fx, fy, cx, cy]
+        elif self.camera_model == 'OPENCV':
+            # Distortion parameters (set to 0 for now)
+            k1 = k2 = p1 = p2 = 0
+            return [fx, fy, cx, cy, k1, k2, p1, p2]
 
     def get_camera_pose(self, camera):
         """Get camera pose in COLMAP format"""
@@ -216,7 +241,7 @@ class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
                 params = self.get_camera_parameters(camera, scene)
                 cameras[camera_id] = Camera(
                     id=camera_id,
-                    model='OPENCV',
+                    model=self.camera_model,
                     width=int(scene.render.resolution_x * scene.render.resolution_percentage / 100.0),
                     height=int(scene.render.resolution_y * scene.render.resolution_percentage / 100.0),
                     params=params
@@ -264,10 +289,107 @@ class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
 
         return {'FINISHED'}
 
+    def _downsample_and_save(self, img_path, output_dir, factor):
+        """Downsample a single image using Blender's API and save it."""
+        image = None
+        try:
+            # Load image into Blender
+            image = bpy.data.images.load(str(img_path), check_existing=False)
+
+            if factor <= 1:
+                bpy.data.images.remove(image)
+                return False
+
+            # Calculate new size and scale
+            new_width = image.size[0] // factor
+            new_height = image.size[1] // factor
+            image.scale(new_width, new_height)
+
+            # Backup scene render settings
+            scene = bpy.context.scene
+            render_settings = scene.render.image_settings
+            original_format = render_settings.file_format
+            original_quality = render_settings.quality
+            original_color_mode = render_settings.color_mode
+
+            # Set output format based on original extension
+            output_path = output_dir / img_path.name
+            file_ext = img_path.suffix.lower()
+
+            if file_ext in ['.jpg', '.jpeg']:
+                render_settings.file_format = 'JPEG'
+                render_settings.quality = 95
+                render_settings.color_mode = 'RGB'
+            elif file_ext == '.png':
+                render_settings.file_format = 'PNG'
+                render_settings.color_mode = 'RGBA'
+            elif file_ext in ['.tif', '.tiff']:
+                render_settings.file_format = 'TIFF'
+            elif file_ext == '.bmp':
+                render_settings.file_format = 'BMP'
+            else:
+                render_settings.file_format = 'PNG'
+                output_path = output_path.with_suffix('.png')
+
+            # Save the scaled image
+            image.save_render(filepath=str(output_path))
+
+            # Restore render settings
+            render_settings.file_format = original_format
+            render_settings.quality = original_quality
+            render_settings.color_mode = original_color_mode
+
+            bpy.data.images.remove(image)
+            return True
+        except Exception as e:
+            self.report({'ERROR'}, f"Error processing {img_path.name}: {e}")
+            if image and image.name in bpy.data.images:
+                bpy.data.images.remove(image)
+            return False
+
+    def run_downsampling(self, base_path):
+        """Run the image downsampling process based on operator properties."""
+        self.report({'INFO'}, "Starting image downsampling...")
+
+        images_dir = base_path / "images"
+        if not images_dir.is_dir():
+            self.report({'WARNING'}, f"'images' directory not found in {base_path}. Skipping downsampling.")
+            return
+
+        try:
+            factors = [int(f) for f in self.downsample_factors.split() if f.strip()]
+        except ValueError:
+            self.report({'ERROR'}, "Invalid downsample factors. Use space-separated integers (e.g., '2 4 8').")
+            return
+
+        extensions = ['*.jpg', '*.jpeg', '*.png', '*.tif', '*.tiff', '*.bmp']
+        image_files = []
+        for ext in extensions:
+            image_files.extend(glob.glob(str(images_dir / ext)))
+            image_files.extend(glob.glob(str(images_dir / ext.upper())))
+
+        if not image_files:
+            self.report({'INFO'}, "No images found to downsample.")
+            return
+
+        for factor in factors:
+            output_dir = base_path / f"images_{factor}"
+            output_dir.mkdir(exist_ok=True)
+            self.report({'INFO'}, f"Generating {len(image_files)} images for factor {factor} in {output_dir}...")
+            
+            for img_path_str in image_files:
+                self._downsample_and_save(Path(img_path_str), output_dir, factor)
+
+        self.report({'INFO'}, "Image downsampling finished.")
+
     def execute(self, context):
         context.window_manager.progress_begin(0, 100)
+        result = {'CANCELLED'}
         try:
-            result = self.export_dataset(context, Path(self.filepath), self.output_format)
+            output_path = Path(self.filepath)
+            result = self.export_dataset(context, output_path, self.output_format)
+            if result == {'FINISHED'} and self.downsample_images:
+                self.run_downsampling(output_path)
         finally:
             context.window_manager.progress_end()
         
@@ -284,3 +406,10 @@ class BlenderExporterForColmap(bpy.types.Operator, ExportHelper):
         
         layout.prop(self, "render_keyframes_only")
         layout.prop(self, "output_format")
+        layout.prop(self, "camera_model")
+
+        box = layout.box()
+        box.prop(self, "downsample_images")
+        if self.downsample_images:
+            sub = box.row(align=True)
+            sub.prop(self, "downsample_factors")
